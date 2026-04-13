@@ -1,0 +1,22 @@
+{
+	"name": "claude-export-to-supermemory",
+	"version": "0.1.0",
+	"type": "module",
+	"private": true,
+	"scripts": {
+		"dev": "bun run src/cli.ts",
+		"start": "bun run src/cli.ts",
+		"check": "tsc --noEmit",
+		"lint": "biome check .",
+		"format": "biome format --write .",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"fflate": "^0.8.2"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.4",
+		"@types/bun": "latest",
+		"typescript": "^5.9.2"
+	}
+}

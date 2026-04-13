@@ -171,6 +171,8 @@ export function buildClaudeImportItems(
 	options: {
 		includeThinking?: boolean;
 		includeTools?: boolean;
+		includeUsers?: boolean;
+		includeProjectMetadata?: boolean;
 		includeMemories?: boolean;
 		includeProjectMemories?: boolean;
 		includeProjectDocs?: boolean;
@@ -180,6 +182,75 @@ export function buildClaudeImportItems(
 	const maxChars = Math.max(2_000, options.maxChars ?? 120_000);
 	const bodyBudget = Math.max(1_000, maxChars - 1_000);
 	const items: PreparedImportItem[] = [];
+
+	if (options.includeUsers !== false) {
+		for (const user of bundle.users ?? []) {
+			const userUuid = asString(user.uuid) ?? crypto.randomUUID();
+			const body = [
+				asString(user.full_name)
+					? `Full name: ${asString(user.full_name)}`
+					: undefined,
+				asString(user.email_address)
+					? `Email: ${asString(user.email_address)}`
+					: undefined,
+			].filter((line): line is string => Boolean(line));
+
+			if (body.length === 0) {
+				continue;
+			}
+
+			items.push(
+				createItem({
+					source: "claude-export",
+					id: `user:${userUuid}`,
+					title: asString(user.full_name) ?? "Claude export user",
+					part: 1,
+					totalParts: 1,
+					metadata: [
+						["kind", "user_profile"],
+						["user_uuid", userUuid],
+					],
+					body: body.join("\n"),
+					maxChars,
+				}),
+			);
+		}
+	}
+
+	if (options.includeProjectMetadata !== false) {
+		for (const project of bundle.projects ?? []) {
+			const projectUuid = asString(project.uuid) ?? crypto.randomUUID();
+			const projectName = asString(project.name) ?? "Untitled project";
+			const body = [
+				`Project name: ${projectName}`,
+				asString(project.description)
+					? `Description:\n${asString(project.description)}`
+					: undefined,
+				asString(project.prompt_template)
+					? `Prompt template:\n${asString(project.prompt_template)}`
+					: undefined,
+			].filter((line): line is string => Boolean(line));
+
+			items.push(
+				createItem({
+					source: "claude-export",
+					id: `project:${projectUuid}`,
+					title: `${projectName} metadata`,
+					part: 1,
+					totalParts: 1,
+					createdAt: toIsoTimestamp(project.created_at),
+					updatedAt: toIsoTimestamp(project.updated_at),
+					metadata: [
+						["kind", "project_metadata"],
+						["project_uuid", projectUuid],
+						["project_name", projectName],
+					],
+					body: body.join("\n\n"),
+					maxChars,
+				}),
+			);
+		}
+	}
 
 	const conversations = parseClaudeConversations(bundle, options);
 	for (const conversation of conversations) {
@@ -359,6 +430,24 @@ function normalizeMessage(
 		messages.push({ role, text, createdAt });
 	}
 
+	const fileSummary = renderFileSummary(message.files ?? []);
+	if (fileSummary) {
+		messages.push({
+			role,
+			text: `[Files]\n${fileSummary}`,
+			createdAt,
+		});
+	}
+
+	const attachmentSummary = renderAttachmentSummary(message.attachments ?? []);
+	if (attachmentSummary) {
+		messages.push({
+			role,
+			text: `[Attachments]\n${attachmentSummary}`,
+			createdAt,
+		});
+	}
+
 	for (const part of message.content ?? []) {
 		const type = asString(part.type);
 		if (type === "thinking" && options.includeThinking) {
@@ -441,6 +530,61 @@ function extractToolResultText(value: unknown): string {
 	}
 
 	return extractText(value);
+}
+
+function renderFileSummary(files: unknown[]): string {
+	const lines = files
+		.map((file) => {
+			if (!file || typeof file !== "object") {
+				return undefined;
+			}
+
+			const candidate = file as Record<string, unknown>;
+			const name = asString(candidate.file_name) ?? asString(candidate.name);
+			const uuid = asString(candidate.file_uuid) ?? asString(candidate.uuid);
+			if (!name && !uuid) {
+				return undefined;
+			}
+
+			return `- ${[name, uuid ? `(uuid: ${uuid})` : undefined]
+				.filter(Boolean)
+				.join(" ")}`;
+		})
+		.filter((line): line is string => Boolean(line));
+
+	return lines.join("\n");
+}
+
+function renderAttachmentSummary(attachments: unknown[]): string {
+	const blocks = attachments
+		.map((attachment) => {
+			if (!attachment || typeof attachment !== "object") {
+				return undefined;
+			}
+
+			const candidate = attachment as Record<string, unknown>;
+			const fileName = asString(candidate.file_name) ?? "Unnamed attachment";
+			const fileType = asString(candidate.file_type);
+			const fileSize =
+				typeof candidate.file_size === "number"
+					? `${candidate.file_size} bytes`
+					: undefined;
+			const extractedContent = extractText(candidate.extracted_content);
+
+			return [
+				`- ${fileName}`,
+				fileType ? `  type: ${fileType}` : undefined,
+				fileSize ? `  size: ${fileSize}` : undefined,
+				extractedContent
+					? `  extracted_content:\n${indentText(extractedContent, "    ")}`
+					: undefined,
+			]
+				.filter((line): line is string => Boolean(line))
+				.join("\n");
+		})
+		.filter((block): block is string => Boolean(block));
+
+	return blocks.join("\n\n");
 }
 
 function createItem(params: {
@@ -644,6 +788,13 @@ function stringifyUnknown(value: unknown): string {
 	} catch {
 		return String(value);
 	}
+}
+
+function indentText(text: string, prefix: string): string {
+	return text
+		.split("\n")
+		.map((line) => `${prefix}${line}`)
+		.join("\n");
 }
 
 function toIsoTimestamp(value: unknown): string | undefined {
